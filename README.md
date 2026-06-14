@@ -66,7 +66,7 @@ The code can be executed in a general Python deep learning environment with PyTo
 | Python  | 3.10 or 3.11                           |
 | PyTorch | >= 2.1.0                               |
 | CUDA    | Optional, recommended for GPU training |
-| OS      | Windows / Linux / macOS                |
+| OS      | Windows               |
 
 GPU is not strictly required, but CUDA-enabled NVIDIA GPUs can significantly speed up training.
 
