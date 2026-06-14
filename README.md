@@ -52,7 +52,7 @@ submission_seed2026_v2_extraold_w15_dropout030.csv
 Private Leaderboard score:
 
 ```text
-0.3749948
+0.3784703
 ```
 
 ---
