@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+
+# Virtual Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# Data files — allow competition datasets, exclude output submissions
+submission*.csv
+
+# Model checkpoints (exclude by default, but allow the final submission weights)
+*.pth
+*.ckpt
+# Allow the final trained weights
+!models_v2_extraold_w15_dropout030/
+!models_v2_extraold_w15_dropout030/*.pt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+runs/
