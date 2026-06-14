@@ -1,7 +1,6 @@
 # AI CUP 2026 春季賽 — 基於時序資料之桌球戰術與結果預測
 
 > **Private Leaderboard Score:** 0.3749948  
-> **Team:** TEAM_XXXX  
 > **Model:** Causal Transformer (Multi-Task) + 5-Fold Ensemble
 
 ---
