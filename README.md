@@ -98,9 +98,6 @@ pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```bash
 python -m venv .venv
 
-# Linux / macOS
-source .venv/bin/activate
-
 # Windows
 .venv\Scripts\activate
 
