@@ -117,40 +117,6 @@ git clone https://github.com/sammi920304/AICUP_2026_Spring.git
 cd AICUP_2026_Spring
 ```
 
-**Linux / macOS：**
-
-```bash
-python train_causal_transformer_v2_extraoldtest.py \
-  --train train.csv \
-  --test test_new.csv \
-  --extra_old_test test.csv \
-  --out submission_seed2026_v2_extraold_w15_dropout030.csv \
-  --sample __no_sample__.csv \
-  --seeds 2026 \
-  --max_folds 0 \
-  --epochs 16 \
-  --patience 6 \
-  --batch_size 128 \
-  --dropout 0.30 \
-  --weight_decay 0.00005 \
-  --augment \
-  --repeat_aug 1 \
-  --player_mask_prob 0.10 \
-  --shot_mask_prob 0.01 \
-  --score_mask_prob 0.01 \
-  --random_truncate_prob 0.25 \
-  --span_mask_prob 0.03 \
-  --span_mask_max_len 3 \
-  --warmup_epochs 2 \
-  --last_step_weight 1.5 \
-  --tta_n 1 \
-  --class_weight_power 0.50 \
-  --head_type linear \
-  --extra_weight 1.5 \
-  --extra_use_server_label 1 \
-  --model_dir models_v2_extraold_w15_dropout030
-```
-
 **Windows（PowerShell）：**
 
 ```powershell
