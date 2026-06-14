@@ -1,58 +1,59 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-AI CUP Badminton Rally Prediction - Causal Transformer v2 + Task-Averaged Checkpoints
-原始檔案: train_causal_transformer_augmask.py
+AI CUP 2026 Spring - Table Tennis Rally Prediction
+Causal Transformer Multi-Task Training Script
 
-v2_headmlp 改進摘要（相較 augmask / v2 版）：
+This script contains the full training and inference pipeline used for the
+AI CUP 2026 Spring table tennis tactical and outcome prediction task.  The
+input data are rally-level stroke sequences, and the model predicts three
+targets at the final observed prefix of each rally:
 
-[S1] LR Warmup + 更長訓練（預期 +0.005~0.015 Overall）
-    原因：epochs=10 + CosineAnnealingLR 會讓 LR 在第 3-4 epoch 就快速下降（
-    ep1=7.8e-4, ep4=5.4e-4, ep7=2.0e-4），模型根本沒有充足時間學習。
-    改法：加入 2-epoch Linear Warmup，然後 CosineAnnealing T_max=40，共 42 epochs。
-    來源：Goyal et al., "Accurate, Large Minibatch SGD", 2017；
-          Vaswani et al. Transformer 原論文也採用 warmup。
+    1. actionId: next stroke action class
+    2. pointId: next landing-point class
+    3. serverGetPoint: probability that the server wins the point
 
-[S2] Multi-seed Ensemble（預期 +0.003~0.008 Overall）
-    原因：單一 seed 的 GroupKFold fold 劃分會有 variance；
-          不同 seed 的模型犯的錯誤互補，平均後更穩定。
-    改法：--seeds "42,2024,2025,2026"，每個 seed 跑完整 5-fold，
-          最終對所有 seed×fold 的 softmax/sigmoid 取平均。
+Main components
+---------------
+1. Feature processing
+   - Reads train.csv, test_new.csv, and optionally an old labeled test.csv.
+   - Builds categorical mappings for all base and derived features.
+   - Converts each rally into a padded sequence of categorical feature IDs.
+   - Derived features summarize score state, rally progress, player pairing,
+     and critical-point context.
 
-[S3] Stochastic Weight Averaging (SWA)（預期 +0.002~0.005 Overall）
-    原因：SWA 在 epoch 曲線的後半段等距採樣多個 checkpoint 的權重平均，
-          等效於多個模型的平均，且零額外推理開銷。
-    改法：--swa_start_epoch 0.6（從 60% epoch 後開始累積），
-          每 --swa_freq epoch 取一次快照。
-    來源：Izmailov et al., "Averaging Weights Leads to Wider Optima and Better Generalization", UAI 2018.
+2. Causal Transformer model
+   - Each categorical feature is embedded separately.
+   - Embedded features are concatenated, projected to the model dimension,
+     combined with positional embeddings, and passed through a Transformer
+     encoder with a causal attention mask.
+   - The causal mask ensures that each time step can only attend to the
+     current and previous strokes, matching the time-series prediction setting.
 
-[S4] 加強 shot_mask_prob 與 span_mask_prob（預期 +0.002~0.005）
-    原因：目前 shot_mask_prob=0.01 期望遮蔽率只有 1%，幾乎無效；
-          span_mask_prob=0.03 則是 97% 的增強樣本根本不會觸發 span masking。
-    改法：shot_mask_prob → 0.06，span_mask_prob → 0.12，span_mask_max_len → 4。
-    參考：Zerveas et al., "A Transformer-based Framework for Multivariate Time Series Representation Learning", KDD 2021.
+3. Multi-task learning
+   - The shared Transformer encoder is followed by three output heads:
+     actionId classification, pointId classification, and serverGetPoint
+     binary prediction.
+   - The training loss combines action cross entropy, point cross entropy,
+     and rally outcome BCE loss.
 
-[S5] Rally BCE loss 的 Last-step Upweighting（預期 +0.001~0.003 on AUC）
-    原因：masked_bce_loss 對每個 prefix 位置的 rally outcome 同等學習，
-          但 submission 只用最後一步的預測。若對最後一步額外加權（λ_last=2.0），
-          模型能更集中學習「看完所有已知 prefix 後的判斷」。
-    改法：在 masked_bce_loss 中加入 last_step_weight 乘在最後一步 loss 上。
+4. Cross-validation ensemble
+   - GroupKFold is used so that the same group does not appear in both the
+     training and validation portions of a fold.
+   - The final submission averages predictions from all trained fold models.
 
-[S6] Test Time Augmentation（TTA）（預期 +0.001~0.003）
-    原因：推理時對每個 test rally 產生多個 masked view（player mask + score mask），
-          平均其 softmax/sigmoid 輸出，等效於 ensemble，無需重新訓練。
-    改法：--tta_n 4（預設關閉），每個 rally 做 4 次隨機 mask 後平均。
+5. Extra old-test training data
+   - When --extra_old_test is provided, the old labeled test set is appended
+     only to the training side of each fold.
+   - Validation still uses only the official training split, preventing the
+     extra data from entering validation.
 
-[S7] 新特徵：rallyProgressRatio + isCriticalPoint（輕微加分）
-    - rallyProgressRatio: strikeNumber / clip(30,1) → 正規化拍次位置 → bucket
-    - isCriticalPoint: (scoreSelf >= 20 AND |scoreSelf - scoreOther| <= 2) → 比賽關鍵局
-
-[S8] 2-layer MLP action/point heads（本版新增）
-    原因：原本 action_head / point_head 只有 Dropout + Linear，對 19 類 actionId 與 10 類 pointId
-          的非線性分類能力較弱。改成 Linear + LayerNorm + GELU + Dropout + Linear，讓最後一步
-          hidden state 能經過更有表達力的分類器。
-    預期：主要嘗試提升 actionId / pointId macro F1；rally head 維持原設計，避免干擾已有效的
-          last-step rally upweighting。
+6. Optional experiment switches
+   - The code keeps several optional switches, such as SWA, TTA, MLP heads,
+     task-specific checkpoints, and task-averaged checkpoints.
+   - These switches are available for reproducibility and experimentation.
+   - The final submitted configuration used linear heads and tta_n=1, meaning
+     Test Time Augmentation was disabled.
 """
 
 import argparse
@@ -93,8 +94,8 @@ DERIVED_FEATURES = [
     "scoreDiffBucket", "scoreSumBucket",
     "isDeuceLike", "isEarlyRally", "isLateRally",
     "playerPairId",
-    "rallyProgressBucket",   # ★ S7：拍次進展 bucket
-    "isCriticalPoint",       # ★ S7：關鍵局面
+    "rallyProgressBucket",   # Discretized rally progress based on strikeNumber.
+    "isCriticalPoint",       # Late-score critical point indicator.
 ]
 
 FEATURES = BASE_FEATURES + DERIVED_FEATURES
@@ -105,7 +106,10 @@ SCORE_FEATURES = ["scoreSelf", "scoreOther", "scoreDiffBucket", "scoreSumBucket"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 工具
+# Utility functions
+# These helpers control randomness, construct table-tennis-specific features,
+# build categorical vocabularies, encode/pad rally sequences, and compute class
+# weights for imbalanced actionId / pointId labels.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def seed_everything(seed: int) -> None:
@@ -118,7 +122,7 @@ def seed_everything(seed: int) -> None:
 
 
 def add_features(df: pd.DataFrame) -> pd.DataFrame:
-    """計算工程特徵，只依賴當前列（無未來資訊）。"""
+    """Add per-stroke derived features using only information from the current row.\n\n    No future strokes are referenced here, so these features are safe for\n    causal time-series prediction.\n    """
     df = df.copy()
     diff = (df["scoreSelf"] - df["scoreOther"]).clip(-15, 15) + 15
     total = (df["scoreSelf"] + df["scoreOther"]).clip(0, 60)
@@ -131,10 +135,10 @@ def add_features(df: pd.DataFrame) -> pd.DataFrame:
     b = df["gamePlayerOtherId"].astype(str)
     df["playerPairId"] = a + "_" + b
 
-    # ★ S7：拍次進展（0~9 bucket）
+    # Rally progress bucket: discretize the current stroke number into 10 bins.
     df["rallyProgressBucket"] = (df["strikeNumber"].clip(0, 30) / 30.0 * 9).astype(int)
 
-    # ★ S7：關鍵局面（20分以上且差距 ≤2）
+    # Critical point indicator: late-score state with a small score difference.
     df["isCriticalPoint"] = (
         (df["scoreSelf"] >= 20) &
         ((df["scoreSelf"] - df["scoreOther"]).abs() <= 2)
@@ -249,6 +253,9 @@ def make_feature_indices(feature_cols):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Dataset
+# RallyDataset returns padded rally sequences.  During training it can create
+# augmented copies by masking selected feature groups or by truncating the
+# observed prefix, which encourages the model to be robust to partial context.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class RallyDataset(Dataset):
@@ -332,7 +339,11 @@ class RallyDataset(Dataset):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 模型
+# Model
+# Categorical features are embedded independently, projected into a shared
+# hidden space, and processed with a causal Transformer encoder.  Three output
+# heads share the encoder representation and predict actionId, pointId, and
+# serverGetPoint.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class CausalTransformerMultiTask(nn.Module):
@@ -361,8 +372,9 @@ class CausalTransformerMultiTask(nn.Module):
         self.encoder = nn.TransformerEncoder(enc_layer, num_layers=n_layers)
         self.norm = nn.LayerNorm(model_dim)
 
-        # [S8] 2-layer MLP heads for next action / point classification.
-        # head_type="linear" 可回復 v2 原本的 Dropout + Linear，用於 ablation。
+        # Optional action / point prediction heads.
+        # - "linear": Dropout + Linear; used by the final submitted setting.
+        # - "mlp": a two-layer non-linear head kept for ablation experiments.
         if head_type == "mlp":
             head_hidden = max(16, int(model_dim * head_hidden_ratio))
             head_dropout = min(0.8, max(0.0, dropout * head_dropout_scale))
@@ -388,7 +400,8 @@ class CausalTransformerMultiTask(nn.Module):
         else:
             raise ValueError(f"Unsupported head_type: {head_type}. Use 'mlp' or 'linear'.")
 
-        # Rally head 保持 v2 原本設計，避免同時改動太多造成 attribution 困難。
+        # Rally outcome head.  It predicts a logit for each prefix position;
+        # the final submission uses the logit at the last valid time step.
         self.rally_head = nn.Sequential(
             nn.Dropout(dropout),
             nn.Linear(model_dim, model_dim // 2),
@@ -411,13 +424,17 @@ class CausalTransformerMultiTask(nn.Module):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [S3] SWA：Stochastic Weight Averaging
+# Optional SWA: Stochastic Weight Averaging
+# This block is kept as an experiment switch.  It is only active when --use_swa
+# is provided; otherwise the ordinary best validation checkpoint is used.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class SWABuffer:
     """
-    對 `swa_freq` 個 epoch 的模型權重取平均。
-    使用 running average（in-place，不額外佔 GPU 記憶體）。
+    Maintains a running average of model weights on CPU.
+
+    The buffer stores a numerically stable running average of selected
+    checkpoints.  It does not affect training unless --use_swa is enabled.
     """
     def __init__(self):
         self.avg_state: Optional[dict] = None
@@ -445,14 +462,21 @@ class SWABuffer:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Loss
+# Loss functions
+# The total loss combines two token-level classification losses and one rally
+# outcome BCE loss.  The rally loss can emphasize the final valid prefix because
+# the submitted prediction is taken from the last observed position.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def masked_bce_loss(logits_step, y, lengths, pos_weight=None, last_step_weight=2.0):
     """
-    [S5] 對最後一步（submission 使用的位置）額外加權。
-    y < 0 的樣本會被視為沒有 rally label，BCE loss 會忽略。
-    這讓 --extra_use_server_label 0 時，舊 test 只提供 action/point transition。
+    Compute masked BCE loss for the rally outcome task.
+
+    The label y is rally-level, so it is expanded to all valid prefix positions.
+    The last valid time step receives an additional weight controlled by
+    last_step_weight, because the final prediction is produced from that
+    position.  Samples with y < 0 are ignored for this task; this is useful when
+    extra data should contribute only actionId / pointId supervision.
     """
     B, T = logits_step.shape
     sample_mask = (y >= 0).float().unsqueeze(1)
@@ -517,7 +541,9 @@ def evaluate(model, loader, ce_a, ce_p, device, weights, pos_weight=None, last_s
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [S6] TTA：Test Time Augmentation
+# Optional TTA: Test Time Augmentation
+# This function is inactive when --tta_n 1.  It remains in the script as an
+# optional inference-time experiment and is not used by the final configuration.
 # ─────────────────────────────────────────────────────────────────────────────
 
 @torch.no_grad()
@@ -525,8 +551,12 @@ def predict_proba_tta(model, X_test, L_test, device, n_action, n_point,
                       feature_indices, player_mask_prob=0.08, score_mask_prob=0.02,
                       shot_mask_prob=0.04, tta_n=4, batch_size=256):
     """
-    [S6] TTA：對每個 test rally 做 tta_n 次隨機遮蔽，平均預測機率。
-    第 0 次為原始（無遮蔽），第 1~tta_n-1 次各做一次隨機 mask。
+    Predict probabilities with optional test-time masking.
+
+    The first pass uses the original input without masking.  Additional passes
+    randomly mask selected feature groups and average the resulting probabilities.
+    When tta_n=1, this function is normally not called by the main inference
+    path, and standard prediction is used instead.
     """
     model.eval()
     sum_pa = np.zeros((len(X_test), n_action), dtype=np.float64)
@@ -546,7 +576,7 @@ def predict_proba_tta(model, X_test, L_test, device, n_action, n_point,
             lb = L_tensor[start:start + batch_size].to(device)
             B = xb.size(0)
 
-            # 原始 view 不遮蔽
+            # The first view is the original sequence; only later views are masked.
             if aug_i > 0:
                 lengths = lb.cpu().tolist()
                 for bi in range(B):
@@ -578,7 +608,10 @@ def predict_proba_tta(model, X_test, L_test, device, n_action, n_point,
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Split
+# Split helpers
+# Prefer GroupKFold when enough groups are available.  This reduces leakage by
+# keeping samples from the same group out of both training and validation within
+# the same fold.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def make_splits(groups, yR, n_folds, val_size, seed):
@@ -596,12 +629,18 @@ def make_splits(groups, yR, n_folds, val_size, seed):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# [S1] LR Scheduler with Warmup
+# Learning-rate scheduler
+# Linear warmup stabilizes early optimization.  Cosine decay then gradually
+# lowers the learning rate during the rest of training.
 # ─────────────────────────────────────────────────────────────────────────────
 
 class WarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
     """
-    [S1] Linear warmup for `warmup_epochs` epochs, then cosine decay to eta_min_ratio * lr_max.
+    Linear warmup followed by cosine decay.
+
+    The returned multiplier is applied to the optimizer learning rate.  During
+    warmup, the multiplier increases linearly.  After warmup, it follows a cosine
+    curve down to eta_min_ratio.
     """
     def __init__(self, optimizer, warmup_epochs: int, total_epochs: int, eta_min_ratio: float = 0.05):
         self.warmup_epochs = warmup_epochs
@@ -610,7 +649,7 @@ class WarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
         super().__init__(optimizer, self._lr_lambda)
 
     def _lr_lambda(self, epoch: int) -> float:
-        # epoch is 0-indexed from scheduler
+        # The scheduler receives a zero-based epoch index from PyTorch.
         if epoch < self.warmup_epochs:
             return (epoch + 1) / max(1, self.warmup_epochs)
         t = epoch - self.warmup_epochs
@@ -621,6 +660,9 @@ class WarmupCosineScheduler(torch.optim.lr_scheduler.LambdaLR):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Train one fold
+# This routine trains one fold model, optionally appends old labeled test data
+# to the training split, evaluates on the validation split, and returns either a
+# single best model or task-specific / task-averaged model collections.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def make_model(args, sizes, n_action, n_point, max_len, device):
@@ -642,15 +684,16 @@ def train_one_fold(fold_id, tr_idx, va_idx, arrays, sizes, n_action, n_point, ma
     seed_everything(args.seed + fold_id)
     feature_indices = make_feature_indices(FEATURES)
 
-    # Base train fold from official train.csv
+    # Training portion selected from the official train.csv split.
     train_X = arrays["X"][tr_idx]
     train_L = arrays["L"][tr_idx]
     train_yA = arrays["yA"][tr_idx]
     train_yP = arrays["yP"][tr_idx]
     train_yR = arrays["yR"][tr_idx]
 
-    # Optional extra supervised data from old test.csv.
-    # It is appended only to the training side of every fold; validation remains official train fold only.
+    # Optional supervised data from the old labeled test.csv.
+    # This data is appended only to the training side of each fold.
+    # The validation fold remains part of the official train.csv split.
     if arrays.get("extra_X") is not None and len(arrays["extra_X"]) > 0 and args.extra_weight > 0:
         rng = np.random.default_rng(args.seed * 1000 + fold_id)
         n_extra = len(arrays["extra_X"])
@@ -720,8 +763,9 @@ def train_one_fold(fold_id, tr_idx, va_idx, arrays, sizes, n_action, n_point, ma
     best_action, best_action_state, best_action_epoch = -1.0, None, 0
     best_point, best_point_state, best_point_epoch = -1.0, None, 0
     best_auc, best_auc_state, best_auc_epoch = -1.0, None, 0
-    # For task-averaged checkpoint prediction: keep evaluated epoch states and metrics.
-    # Each record contains one checkpoint and validation metrics at that epoch.
+    # For task-averaged checkpoint prediction, keep evaluated epoch states and
+    # validation metrics.  This optional path is inactive unless the corresponding
+    # command-line flag is set.
     epoch_records = []
     patience_count = 0
 
@@ -801,7 +845,8 @@ def train_one_fold(fold_id, tr_idx, va_idx, arrays, sizes, n_action, n_point, ma
             print(f"[Fold {fold_id}] Early stop ep={epoch}; best_ep={best_epoch}, best={best_score:.5f}")
             break
 
-    # SWA remains overall-only. If it beats overall best, also use it as fallback overall state.
+    # If SWA is enabled, compare its validation score against the best ordinary
+    # checkpoint.  Without --use_swa, this block is skipped.
     if swa.has_data and args.use_swa:
         swa.apply_to(model, device)
         swa_metrics = evaluate(model, val_loader, ce_a, ce_p, device, weights,
@@ -868,7 +913,8 @@ def train_one_fold(fold_id, tr_idx, va_idx, arrays, sizes, n_action, n_point, ma
         return models, best_score
 
     if args.task_specific_checkpoints:
-        # Fallback safety: if a task state was never set, use overall best.
+        # Fallback safety: if a task-specific checkpoint was never selected,
+        # reuse the overall best checkpoint for that task.
         best_action_state = best_action_state or best_state
         best_point_state = best_point_state or best_state
         best_auc_state = best_auc_state or best_state
@@ -898,11 +944,14 @@ def train_one_fold(fold_id, tr_idx, va_idx, arrays, sizes, n_action, n_point, ma
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# main
+# Main pipeline
+# Loads data, builds encoders and sequences, trains fold models for each seed,
+# averages test predictions, and writes the final submission CSV.
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main(args):
-    # ★ [S2] Multi-seed ensemble：解析 seeds 字串
+    # Parse comma-separated random seeds.  The final submitted configuration uses
+    # a single seed, but multiple seeds can be supplied for experimentation.
     seeds = [int(s.strip()) for s in str(args.seeds).split(",") if s.strip()]
     print(f"Multi-seed ensemble: seeds={seeds}, folds={args.folds}, max_folds={args.max_folds}")
 
@@ -939,7 +988,8 @@ def main(args):
     max_len = args.max_len if args.max_len > 0 else obs_max
     print(f"max_len={max_len}")
 
-    # Include extra_old_test in categorical maps so its player/action/point values are not mapped to PAD.
+    # Include old labeled test data in categorical maps so its player/action/point
+    # values are represented explicitly instead of being mapped to PAD.
     map_df = pd.concat([train_df, extra_df], axis=0, ignore_index=True) if extra_df is not None else train_df
     maps, sizes = build_maps(map_df, FEATURES)
     X, yA_raw, yP_raw, yR, L, groups = build_train_sequences(
@@ -989,7 +1039,7 @@ def main(args):
             "extra_yR": extra_arrays["yR"],
         })
 
-    # ★ [S2] 外迴圈：多 seed
+    # Outer loop over seeds.  Predictions from all seed×fold models are averaged.
     for seed in seeds:
         args.seed = seed
         seed_everything(seed)
@@ -1003,8 +1053,8 @@ def main(args):
                 fold_id, tr_idx, va_idx, arrays, sizes, n_action, n_point, max_len, args, device
             )
 
-            # Task-averaged checkpoint prediction:
-            # Within each fold, average top-k checkpoints for selected task sources.
+            # Optional task-averaged checkpoint prediction:
+            # within each fold, average top-k checkpoints for selected task sources.
             if args.task_avg_checkpoints:
                 pa_list, pp_list, pr_list = [], [], []
                 for m in model["action"]:
@@ -1019,15 +1069,15 @@ def main(args):
                 pa = np.mean(pa_list, axis=0)
                 pp = np.mean(pp_list, axis=0)
                 pr = np.mean(pr_list, axis=0)
-            # Task-specific checkpoint prediction:
-            # actionId uses best F1_action checkpoint, pointId uses best F1_point,
-            # serverGetPoint uses best AUC checkpoint.
+            # Optional task-specific checkpoint prediction:
+            # actionId uses the best F1_action checkpoint, pointId uses the best
+            # F1_point checkpoint, and serverGetPoint uses the best AUC checkpoint.
             elif args.task_specific_checkpoints:
                 pa, _, _ = _predict_proba_standard(model["action"], test_loader, device, n_action, n_point)
                 _, pp, _ = _predict_proba_standard(model["point"], test_loader, device, n_action, n_point)
                 _, _, pr = _predict_proba_standard(model["rally"], test_loader, device, n_action, n_point)
             else:
-                # ★ [S6] TTA 或標準推理
+                # Use TTA only when args.tta_n > 1; otherwise run standard inference.
                 feature_indices = make_feature_indices(FEATURES)
                 if args.tta_n > 1:
                     pa, pp, pr = predict_proba_tta(
@@ -1116,7 +1166,7 @@ if __name__ == "__main__":
     parser.add_argument("--extra_weight", type=float, default=1.0, help="舊 test 訓練樣本權重/抽樣比例；1.0=全部加入，0.5=每 fold 隨機取半數，2.0=重複兩次")
     parser.add_argument("--extra_use_server_label", type=int, default=1, help="1=使用舊 test 的 serverGetPoint 作為 rally label；0=舊 test 只訓練 action/point transition")
 
-    # ★ [S2] Multi-seed：逗號分隔，例如 "42,2024,2025,2026"
+    # Multi-seed option: comma-separated values, e.g. "42,2024,2025,2026".
     parser.add_argument("--seeds", default="2026", help="逗號分隔的 seed 列表，每個 seed 跑完整 folds")
     parser.add_argument("--seed", type=int, default=2026, help="內部用，不需手動設定")
 
@@ -1136,9 +1186,10 @@ if __name__ == "__main__":
     parser.add_argument("--ff_dim", type=int, default=384)
     parser.add_argument("--dropout", type=float, default=0.28)
 
-    # [S8] Action / point classification heads. mlp 為本版預設；linear 可回復 v2 原始 head。
+    # Action / point classification head option.  The final configuration uses
+    # "linear"; "mlp" is kept for optional ablation experiments.
     parser.add_argument("--head_type", default="linear", choices=["mlp", "linear"],
-                        help="action/point head 類型：mlp=2-layer MLP；linear=v2 原始 Dropout+Linear")
+                        help="action/point head 類型：mlp=2-layer MLP；linear=Dropout+Linear")
     parser.add_argument("--head_hidden_ratio", type=float, default=0.5,
                         help="MLP head hidden dim = model_dim * ratio")
     parser.add_argument("--head_dropout_scale", type=float, default=0.5,
@@ -1151,26 +1202,26 @@ if __name__ == "__main__":
     parser.add_argument("--class_weight_power", type=float, default=0.5)
     parser.add_argument("--rally_pos_weight", action="store_true")
 
-    # ★ [S1] LR Warmup
+    # Learning-rate warmup
     parser.add_argument("--warmup_epochs", type=int, default=2,
                         help="Linear warmup 的 epoch 數，之後接 cosine decay")
 
-    # ★ [S3] SWA
+    # Optional SWA
     parser.add_argument("--use_swa", action="store_true", help="啟用 SWA 平均（建議與 --epochs 40+ 搭配）")
     parser.add_argument("--swa_start_ratio", type=float, default=0.6,
                         help="從第 swa_start_ratio*epochs epoch 後開始累積 SWA")
     parser.add_argument("--swa_freq", type=int, default=2,
                         help="每幾個 epoch 累積一次 SWA 快照")
 
-    # ★ [S5] Rally last-step upweighting
+    # Rally last-step upweighting
     parser.add_argument("--last_step_weight", type=float, default=1.5,
                         help="最後一步的 rally BCE loss 額外乘數（1.0=關閉，2.0=加倍）")
 
-    # ★ [S6] TTA
+    # Optional Test Time Augmentation
     parser.add_argument("--tta_n", type=int, default=1,
                         help="Test Time Augmentation 次數；1=關閉，建議 4~8")
 
-    # Augmentation（★ [S4] 預設提升）
+    # Data augmentation options
     parser.add_argument("--augment", action="store_true")
     parser.add_argument("--repeat_aug", type=int, default=1)
     parser.add_argument("--player_mask_prob", type=float, default=0.10)
