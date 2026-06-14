@@ -1,72 +1,99 @@
 # AI CUP 2026 春季賽 — 基於時序資料之桌球戰術與結果預測
 
-> **Private Leaderboard Score:** 0.3749948  
-> **Model:** Causal Transformer (Multi-Task) + 5-Fold Ensemble
+> **Private Leaderboard Score:** `0.3749948`
+> **Final Model:** Causal Transformer Multi-Task Model + 5-Fold Ensemble
 
 ---
 
-## 目錄
+## Table of Contents
 
-- [專案簡介](#專案簡介)
-- [環境需求](#環境需求)
-- [安裝方式](#安裝方式)
-- [專案結構](#專案結構)
-- [快速開始](#快速開始)
-- [訓練參數說明](#訓練參數說明)
-- [模型架構](#模型架構)
-- [實驗結果](#實驗結果)
-- [參考文獻](#參考文獻)
-
----
-
-## 專案簡介
-
-本專案為 AI CUP 2026 春季賽「基於時序資料之桌球戰術與結果預測」競賽的解題方案。
-
-競賽任務要求根據一個 rally 中已發生的擊球序列，預測後續的：
-- `actionId`：下一拍球種
-- `pointId`：下一拍落點
-- `serverGetPoint`：發球方是否得分（二元分類）
-
-本方案採用 **Causal Transformer 多任務序列預測模型**，搭配：
-- 5-fold GroupKFold ensemble
-- 舊版 `test.csv` 作為額外訓練資料（domain adaptation）
-- Light data augmentation（player/shot/score masking、random truncation、span masking）
-- Warmup + Cosine LR Scheduler
-- Last-step upweighting on rally BCE loss
+* [Project Overview](#project-overview)
+* [Environment](#environment)
+* [Installation](#installation)
+* [Project Structure](#project-structure)
+* [Code Overview](#code-overview)
+* [Quick Start](#quick-start)
+* [Dataset](#dataset)
+* [Training Arguments](#training-arguments)
+* [Model Architecture](#model-architecture)
+* [Derived Features](#derived-features)
+* [Experiment Strategies and Final Configuration](#experiment-strategies-and-final-configuration)
+* [Results](#results)
+* [External Resources and References](#external-resources-and-references)
+* [License](#license)
 
 ---
 
-## 環境需求
+## Project Overview
 
-| 項目 | 建議版本 |
-|------|----------|
-| Python | 3.10 或 3.11 |
-| PyTorch | ≥ 2.1.0 |
-| CUDA（選用） | 11.8 / 12.1 |
-| OS | Windows / Linux / macOS |
+This repository contains the solution for the **AI CUP 2026 Spring — Table Tennis Tactical and Outcome Prediction Based on Time-Series Data** competition.
 
-GPU 非必要，但有 CUDA 支援的 NVIDIA GPU 可大幅加速訓練。  
-開發與測試環境：NVIDIA GeForce RTX 4050 Laptop GPU。
+The task is to predict the following targets based on the observed stroke sequence in a rally:
+
+* `actionId`: the next stroke type
+* `pointId`: the next landing point
+* `serverGetPoint`: whether the server wins the point
+
+The final solution uses a **Causal Transformer multi-task sequence prediction model** with:
+
+* 5-fold GroupKFold ensemble
+* Additional labeled old `test.csv` as extra training data
+* Light data augmentation
+* Dropout regularization
+* Last-step loss upweighting
+* Multi-task prediction heads for `actionId`, `pointId`, and `serverGetPoint`
+
+Final best submission:
+
+```text
+submission_seed2026_v2_extraold_w15_dropout030.csv
+```
+
+Private Leaderboard score:
+
+```text
+0.3749948
+```
 
 ---
 
-## 安裝方式
+## Environment
 
-### 方式一：Conda（建議）
+The code can be executed in a general Python deep learning environment with PyTorch installed.
+
+| Item    | Recommended Version                    |
+| ------- | -------------------------------------- |
+| Python  | 3.10 or 3.11                           |
+| PyTorch | >= 2.1.0                               |
+| CUDA    | Optional, recommended for GPU training |
+| OS      | Windows / Linux / macOS                |
+
+GPU is not strictly required, but CUDA-enabled NVIDIA GPUs can significantly speed up training.
+
+The experiments were developed and tested with:
+
+```text
+NVIDIA GeForce RTX 4050 Laptop GPU
+```
+
+---
+
+## Installation
+
+### Option 1: Conda
 
 ```bash
 conda env create -f environment.yml
 conda activate tabletennis
 ```
 
-若要指定 CUDA 版本的 PyTorch（例如 CUDA 12.1），可在建立環境後執行：
+If a specific CUDA version is required, install the corresponding PyTorch version after creating the environment. For example, for CUDA 12.1:
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cu121
 ```
 
-### 方式二：pip
+### Option 2: pip
 
 ```bash
 python -m venv .venv
@@ -80,23 +107,23 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-若使用 GPU，請依照 [PyTorch 官方安裝指引](https://pytorch.org/get-started/locally/) 安裝對應 CUDA 版本。
+If GPU acceleration is needed, please follow the official PyTorch installation guide to install the CUDA-compatible version.
 
 ---
 
-## 專案結構
+## Project Structure
 
-```
+```text
 AICUP_2026_Spring/
-├── train_causal_transformer_v2_extraoldtest.py   # 主訓練腳本
-├── train.csv                                      # 主要訓練資料（84,707 筆擊球紀錄）
-├── test.csv                                       # 舊版測試資料，作為額外訓練用（3,589 筆）
-├── test_new.csv                                   # 最終預測資料（5,668 筆）
-├── requirements.txt                               # pip 依賴清單
-├── environment.yml                                # conda 環境設定
+├── train_causal_transformer_v2_extraoldtest.py   # Main training and inference script
+├── train.csv                                      # Main training data
+├── test.csv                                       # Old labeled test data used as extra training data
+├── test_new.csv                                   # Final prediction data
+├── requirements.txt                               # pip dependencies
+├── environment.yml                                # conda environment
 ├── .gitignore
 ├── README.md
-└── models_v2_extraold_w15_dropout030/             # 5-fold 訓練好的模型權重
+└── models_v2_extraold_w15_dropout030/             # Saved 5-fold model checkpoints
     ├── fold1_seed2026.pt
     ├── fold2_seed2026.pt
     ├── fold3_seed2026.pt
@@ -106,18 +133,45 @@ AICUP_2026_Spring/
 
 ---
 
-## 快速開始
+## Code Overview
 
-### 最終提交版本指令（完整參數）
+The main script is:
 
-資料集與模型權重皆已包含於 repo，clone 後即可直接執行：
+```text
+train_causal_transformer_v2_extraoldtest.py
+```
+
+This script includes the full pipeline from data preprocessing to model training and submission generation.
+
+| Module                | Description                                                                               |
+| --------------------- | ----------------------------------------------------------------------------------------- |
+| Argument parser       | Defines paths, training parameters, model hyperparameters, and augmentation settings      |
+| Data loading          | Loads `train.csv`, `test_new.csv`, and optionally old `test.csv` as extra training data   |
+| Feature engineering   | Builds score, rally progress, player pair, and critical-point features                    |
+| Sequence construction | Groups strokes by rally and converts them into time-series training samples               |
+| Data augmentation     | Supports player masking, shot masking, score masking, random truncation, and span masking |
+| Model definition      | Implements categorical embeddings, positional embeddings, and Causal Transformer Encoder  |
+| Multi-task heads      | Predicts `actionId`, `pointId`, and `serverGetPoint`                                      |
+| Training loop         | Uses GroupKFold, validation scoring, early stopping, and checkpoint saving                |
+| Inference             | Averages predictions from all fold models to generate the final submission                |
+| Checkpointing         | Saves the best model of each fold to `model_dir`                                          |
+
+The script also keeps several optional parameters for experiments, such as `--tta_n`, `--head_type`, and `--max_folds`. In the final submitted configuration, `--tta_n 1` is used, which means Test Time Augmentation is disabled.
+
+---
+
+## Quick Start
+
+### Clone the repository
 
 ```bash
 git clone https://github.com/sammi920304/AICUP_2026_Spring.git
 cd AICUP_2026_Spring
 ```
 
-**Windows（PowerShell）：**
+### Final training command
+
+#### Windows PowerShell
 
 ```powershell
 python train_causal_transformer_v2_extraoldtest.py `
@@ -151,9 +205,15 @@ python train_causal_transformer_v2_extraoldtest.py `
   --model_dir models_v2_extraold_w15_dropout030
 ```
 
-訓練完成後會輸出 `submission_seed2026_v2_extraold_w15_dropout030.csv`。
+After training and inference, the script outputs:
 
-### 快速驗證版本（僅主要訓練資料）
+```text
+submission_seed2026_v2_extraold_w15_dropout030.csv
+```
+
+### Quick sanity check
+
+For a shorter test run:
 
 ```bash
 python train_causal_transformer_v2_extraoldtest.py \
@@ -167,181 +227,234 @@ python train_causal_transformer_v2_extraoldtest.py \
 
 ---
 
-## 資料集說明
+## Dataset
 
-| 檔案 | 筆數 | 用途 |
-|------|------|------|
-| `train.csv` | 84,707 筆擊球紀錄 | 主要訓練資料 |
-| `test.csv` | 3,589 筆擊球紀錄 | 舊版有標籤測試資料，作為額外訓練資料（競賽允許使用） |
-| `test_new.csv` | 5,668 筆擊球紀錄 | 最終預測資料 |
+| File           | Number of Rows | Usage                                             |
+| -------------- | -------------: | ------------------------------------------------- |
+| `train.csv`    |         84,707 | Main training data                                |
+| `test.csv`     |          3,589 | Old labeled test data used as extra training data |
+| `test_new.csv` |          5,668 | Final prediction data                             |
 
-**欄位說明：**
+### Main columns
 
-| 欄位 | 說明 |
-|------|------|
-| `rally_uid` | Rally 唯一識別碼 |
-| `sex` | 性別 |
-| `match` | 比賽場次（GroupKFold 分組依據） |
-| `numberGame` | 局數 |
-| `strikeNumber` | 當前拍次 |
-| `scoreSelf` / `scoreOther` | 雙方比分 |
-| `serverGetPoint` | 發球方是否得分（預測目標） |
-| `gamePlayerId` / `gamePlayerOtherId` | 球員 ID |
-| `strikeId` | 擊球方式 |
-| `handId` | 慣用手 |
-| `strengthId` | 擊球力道 |
-| `spinId` | 旋轉類型 |
-| `pointId` | 落點（預測目標） |
-| `actionId` | 球種（預測目標） |
-| `positionId` | 站位 |
-
----
-
-## 訓練參數說明
-
-### 資料相關
-
-| 參數 | 預設值 | 說明 |
-|------|--------|------|
-| `--train` | `train.csv` | 主要訓練資料路徑 |
-| `--test` | `test_new.csv` | 預測資料路徑 |
-| `--extra_old_test` | `""` | 舊版 test.csv 路徑（額外訓練用） |
-| `--extra_weight` | `1.0` | 額外資料重複比例（1.5 = 全部 + 隨機 50%） |
-| `--extra_use_server_label` | `1` | 是否使用舊 test 的 serverGetPoint 標籤 |
-| `--out` | `submission_v2_taskavg.csv` | 輸出 submission 路徑 |
-| `--model_dir` | `models_v2_extraoldtest` | 模型權重儲存目錄 |
-
-### 訓練設定
-
-| 參數 | 預設值 | 說明 |
-|------|--------|------|
-| `--seeds` | `"2026"` | 逗號分隔 seed，多 seed 則做 ensemble |
-| `--folds` | `5` | GroupKFold fold 數 |
-| `--max_folds` | `0` | 限制 fold 數，0 = 全部 |
-| `--epochs` | `16` | 最大訓練 epoch 數 |
-| `--patience` | `6` | Early stopping patience |
-| `--batch_size` | `128` | Batch size |
-| `--warmup_epochs` | `2` | LR linear warmup epoch 數 |
-
-### 模型架構
-
-| 參數 | 預設值 | 說明 |
-|------|--------|------|
-| `--emb_dim` | `24` | 每個特徵的 embedding 維度 |
-| `--model_dim` | `192` | Transformer hidden dimension |
-| `--n_heads` | `6` | Multi-head attention head 數 |
-| `--n_layers` | `3` | Transformer encoder 層數 |
-| `--ff_dim` | `384` | Feed-forward network 維度 |
-| `--dropout` | `0.28` | Dropout 比例 |
-| `--head_type` | `"linear"` | 分類頭類型：`linear` 或 `mlp` |
-
-### 正則化與優化
-
-| 參數 | 預設值 | 說明 |
-|------|--------|------|
-| `--lr` | `8e-4` | 初始學習率 |
-| `--weight_decay` | `5e-5` | AdamW weight decay |
-| `--grad_clip` | `1.0` | Gradient clipping |
-| `--label_smoothing` | `0.03` | Cross entropy label smoothing |
-| `--class_weight_power` | `0.5` | 類別權重調整（0=平均，1=完全逆頻率） |
-| `--last_step_weight` | `1.5` | Rally BCE loss 最後一步加權倍率 |
-
-### 資料增強
-
-| 參數 | 預設值 | 說明 |
-|------|--------|------|
-| `--augment` | `False` | 是否啟用資料增強 |
-| `--repeat_aug` | `1` | 增強樣本重複次數 |
-| `--player_mask_prob` | `0.10` | 球員 ID 遮蔽機率 |
-| `--shot_mask_prob` | `0.01` | 擊球特徵遮蔽機率 |
-| `--score_mask_prob` | `0.01` | 比分特徵遮蔽機率 |
-| `--random_truncate_prob` | `0.25` | 隨機截斷 rally 前綴機率 |
-| `--span_mask_prob` | `0.03` | 連續區段遮蔽觸發機率 |
-| `--span_mask_max_len` | `3` | 連續遮蔽最大長度 |
-
-### 推論
-
-| 參數 | 預設值 | 說明 |
-|------|--------|------|
-| `--tta_n` | `1` | Test Time Augmentation 次數（1 = 關閉） |
+| Column                               | Description                       |
+| ------------------------------------ | --------------------------------- |
+| `rally_uid`                          | Unique rally identifier           |
+| `sex`                                | Gender                            |
+| `match`                              | Match identifier                  |
+| `numberGame`                         | Game number                       |
+| `strikeNumber`                       | Stroke number in the rally        |
+| `scoreSelf` / `scoreOther`           | Current score                     |
+| `serverGetPoint`                     | Whether the server wins the point |
+| `gamePlayerId` / `gamePlayerOtherId` | Player IDs                        |
+| `strikeId`                           | Stroke phase / type identifier    |
+| `handId`                             | Handedness                        |
+| `strengthId`                         | Stroke strength                   |
+| `spinId`                             | Spin type                         |
+| `pointId`                            | Landing point                     |
+| `actionId`                           | Stroke action type                |
+| `positionId`                         | Player position                   |
 
 ---
 
-## 模型架構
+## Training Arguments
 
-```
-輸入特徵（14 個 BASE + 8 個 DERIVED = 22 維）
+### Data arguments
+
+| Argument                   | Default                     | Description                                                |
+| -------------------------- | --------------------------- | ---------------------------------------------------------- |
+| `--train`                  | `train.csv`                 | Main training data path                                    |
+| `--test`                   | `test_new.csv`              | Prediction data path                                       |
+| `--extra_old_test`         | `""`                        | Old `test.csv` path used as extra training data            |
+| `--extra_weight`           | `1.0`                       | Extra data weight; final version uses `1.5`                |
+| `--extra_use_server_label` | `1`                         | Whether to use `serverGetPoint` labels from old `test.csv` |
+| `--out`                    | `submission_v2_taskavg.csv` | Output submission path                                     |
+| `--model_dir`              | `models_v2_extraoldtest`    | Directory for saved checkpoints                            |
+
+### Training settings
+
+| Argument          | Default  | Description                               |
+| ----------------- | -------- | ----------------------------------------- |
+| `--seeds`         | `"2026"` | Comma-separated random seeds              |
+| `--folds`         | `5`      | Number of GroupKFold splits               |
+| `--max_folds`     | `0`      | Maximum folds to run; `0` means all folds |
+| `--epochs`        | `16`     | Maximum number of epochs                  |
+| `--patience`      | `6`      | Early stopping patience                   |
+| `--batch_size`    | `128`    | Batch size                                |
+| `--warmup_epochs` | `2`      | Number of warmup epochs                   |
+
+### Model arguments
+
+| Argument      | Default    | Description                                      |
+| ------------- | ---------- | ------------------------------------------------ |
+| `--emb_dim`   | `24`       | Embedding dimension for each categorical feature |
+| `--model_dim` | `192`      | Transformer hidden dimension                     |
+| `--n_heads`   | `6`        | Number of attention heads                        |
+| `--n_layers`  | `3`        | Number of Transformer encoder layers             |
+| `--ff_dim`    | `384`      | Feed-forward dimension                           |
+| `--dropout`   | `0.28`     | Dropout rate; final version uses `0.30`          |
+| `--head_type` | `"linear"` | Prediction head type: `linear` or `mlp`          |
+
+### Optimization and regularization
+
+| Argument               | Default | Description                       |
+| ---------------------- | ------- | --------------------------------- |
+| `--lr`                 | `8e-4`  | Initial learning rate             |
+| `--weight_decay`       | `5e-5`  | AdamW weight decay                |
+| `--grad_clip`          | `1.0`   | Gradient clipping                 |
+| `--label_smoothing`    | `0.03`  | Label smoothing for cross entropy |
+| `--class_weight_power` | `0.5`   | Class weight strength             |
+| `--last_step_weight`   | `1.5`   | Last-step loss upweighting factor |
+
+### Data augmentation
+
+| Argument                 | Default | Description                                   |
+| ------------------------ | ------- | --------------------------------------------- |
+| `--augment`              | `False` | Enable data augmentation                      |
+| `--repeat_aug`           | `1`     | Number of augmented copies                    |
+| `--player_mask_prob`     | `0.10`  | Player feature masking probability            |
+| `--shot_mask_prob`       | `0.01`  | Shot feature masking probability              |
+| `--score_mask_prob`      | `0.01`  | Score feature masking probability             |
+| `--random_truncate_prob` | `0.25`  | Probability of random rally prefix truncation |
+| `--span_mask_prob`       | `0.03`  | Probability of span masking                   |
+| `--span_mask_max_len`    | `3`     | Maximum length of span masking                |
+
+### Inference
+
+| Argument  | Default | Description                                               |
+| --------- | ------- | --------------------------------------------------------- |
+| `--tta_n` | `1`     | Number of Test Time Augmentation runs; `1` means disabled |
+
+---
+
+## Model Architecture
+
+```text
+Input categorical features
     ↓
-Embedding Layer（每個 categorical feature 各自 embedding）
+Categorical Embedding
     ↓
 Linear Projection → LayerNorm → Dropout
     ↓
 Positional Embedding
     ↓
-Causal Transformer Encoder（causal mask 確保只看過去資訊）
-  × n_layers（預設 3 層）
-  - Multi-Head Self-Attention（n_heads=6）
-  - Feed-Forward Network（ff_dim=384）
-  - Pre-LayerNorm + Residual
+Causal Transformer Encoder
+    - Multi-Head Self-Attention
+    - Feed-Forward Network
+    - Residual Connection
+    - LayerNorm
     ↓
 LayerNorm
     ↓
 ┌──────────────┬──────────────┬──────────────┐
 │ action head  │  point head  │  rally head  │
-│ (Dropout+    │ (Dropout+    │ (MLP + BCE   │
-│  Linear)     │  Linear)     │  sigmoid)    │
 │ → actionId   │ → pointId    │ → server     │
-│   (分類)     │   (分類)     │  GetPoint    │
+│              │              │   GetPoint   │
 └──────────────┴──────────────┴──────────────┘
 ```
 
-**Loss Function：**
+### Loss function
+
+```text
+total_loss = 0.4 × CE(actionId)
+           + 0.4 × CE(pointId)
+           + 0.2 × BCE(serverGetPoint)
 ```
-total_loss = 0.4 × CE(actionId) + 0.4 × CE(pointId) + 0.2 × BCE(serverGetPoint)
-```
 
-最終預測：5 個 fold 模型的 softmax / sigmoid 輸出取平均。
+The final prediction is the average of softmax / sigmoid outputs from the 5 fold models.
 
 ---
 
-## 衍生特徵說明
+## Derived Features
 
-| 特徵名稱 | 說明 |
-|----------|------|
-| `scoreDiffBucket` | 雙方比分差距（clip −15~15，offset +15） |
-| `scoreSumBucket` | 雙方比分總和（clip 0~60） |
-| `isDeuceLike` | 雙方皆達 20 分以上（deuce 狀態） |
-| `isEarlyRally` | strikeNumber ≤ 3 |
-| `isLateRally` | strikeNumber ≥ 12 |
-| `playerPairId` | 雙方球員組合 ID（categorical） |
-| `rallyProgressBucket` | strikeNumber 正規化後 bucket（0~9） |
-| `isCriticalPoint` | scoreSelf ≥ 20 且雙方差距 ≤ 2 |
-
----
-
-## 實驗結果
-
-| 設定 | Platform Score |
-|------|---------------|
-| 原始基線（無額外資料） | 0.34597 |
-| 加入舊版 test.csv（extra_weight=1.0） | 0.36869 |
-| extra_weight=1.5 | 0.37266 |
-| **extra_weight=1.5 + dropout=0.30（最終提交）** | **0.37499** |
+| Feature               | Description                                                       |
+| --------------------- | ----------------------------------------------------------------- |
+| `scoreDiffBucket`     | Bucketed score difference                                         |
+| `scoreSumBucket`      | Bucketed total score                                              |
+| `isDeuceLike`         | Whether both sides have reached at least 20 points                |
+| `isEarlyRally`        | Whether `strikeNumber <= 3`                                       |
+| `isLateRally`         | Whether `strikeNumber >= 12`                                      |
+| `playerPairId`        | Categorical ID for the player pair                                |
+| `rallyProgressBucket` | Bucketed rally progress                                           |
+| `isCriticalPoint`     | Whether score is at least 20 and the score difference is within 2 |
 
 ---
 
-## 參考文獻
+## Experiment Strategies and Final Configuration
 
-- Vaswani, A., et al. (2017). *Attention is all you need.* NeurIPS.
-- Loshchilov, I., & Hutter, F. (2019). *Decoupled weight decay regularization.* ICLR.
-- Izmailov, P., et al. (2018). *Averaging Weights Leads to Wider Optima and Better Generalization.* UAI.
-- Goyal, P., et al. (2017). *Accurate, Large Minibatch SGD.* arXiv.
-- Zerveas, G., et al. (2021). *A Transformer-based Framework for Multivariate Time Series Representation Learning.* KDD.
-- Pedregosa, F., et al. (2011). *Scikit-learn: Machine learning in Python.* JMLR, 12, 2825–2830.
-- Paszke, A., et al. (2019). *PyTorch: An imperative style, high-performance deep learning library.* NeurIPS.
+Several strategies were tested during development. The final configuration only keeps the methods that improved or stabilized the leaderboard score.
+
+### Tested strategies
+
+| Strategy                                       | Description                                                    | Final Status              |
+| ---------------------------------------------- | -------------------------------------------------------------- | ------------------------- |
+| 5-fold GroupKFold ensemble                     | Average predictions from 5 fold models                         | Used                      |
+| Old `test.csv` as extra training data          | Use the allowed old labeled test set for domain adaptation     | Used                      |
+| `extra_weight` search                          | Tested different weights for the old test data                 | Used `1.5`                |
+| Dropout tuning                                 | Tested different dropout values                                | Used `0.30`               |
+| Light data augmentation                        | Player / shot / score masking, random truncation, span masking | Used                      |
+| Last-step upweighting                          | Increase loss weight near final prediction positions           | Used                      |
+| Test Time Augmentation                         | Optional inference-time augmentation                           | Not used; final `tta_n=1` |
+| MLP prediction head                            | Replaced linear heads with MLP heads                           | Not used                  |
+| Multi-seed ensemble                            | Ensemble multiple random seeds                                 | Not used                  |
+| External CoachAI / ShuttleSet22 converted data | Tested converted external stroke forecasting data              | Not used                  |
+
+### Final configuration
+
+The final submitted version uses:
+
+* Causal Transformer multi-task model
+* 5-fold GroupKFold ensemble
+* `train.csv` as the main training data
+* Old `test.csv` as additional training data
+* `extra_weight=1.5`
+* `extra_use_server_label=1`
+* `dropout=0.30`
+* `last_step_weight=1.5`
+* Light data augmentation
+* Linear prediction heads
+* `tta_n=1`, meaning Test Time Augmentation is disabled
 
 ---
 
-## 授權
+## Results
 
-本程式碼供 AI CUP 2026 競賽報告使用。使用競賽資料時請遵守主辦單位規定。
+| Setting                                        | Platform Score |
+| ---------------------------------------------- | -------------: |
+| Original baseline without extra data           |        0.34597 |
+| Add old `test.csv`, `extra_weight=1.0`         |        0.36869 |
+| Add old `test.csv`, `extra_weight=1.5`         |        0.37266 |
+| **Final: `extra_weight=1.5` + `dropout=0.30`** |    **0.37499** |
+
+The results show that the old `test.csv` provides useful distributional information for `test_new.csv`. Setting `extra_weight=1.5` gave the best balance between the original training data and the old test-domain data. Increasing dropout to `0.30` further improved generalization.
+
+---
+
+## External Resources and References
+
+### External resources
+
+* Official competition data:
+
+  * `train.csv`
+  * `test_new.csv`
+  * old labeled `test.csv`
+* Open-source Python libraries:
+
+  * PyTorch
+  * pandas
+  * NumPy
+  * scikit-learn
+  * tqdm
+
+### References
+
+* Vaswani, A., Shazeer, N., Parmar, N., Uszkoreit, J., Jones, L., Gomez, A. N., Kaiser, Ł., & Polosukhin, I. (2017). *Attention is all you need*. Advances in Neural Information Processing Systems.
+* Loshchilov, I., & Hutter, F. (2019). *Decoupled weight decay regularization*. International Conference on Learning Representations.
+
+---
+
+## License
+
+This repository is prepared for the AI CUP 2026 competition report.
+Please follow the official competition rules when using the provided data.
