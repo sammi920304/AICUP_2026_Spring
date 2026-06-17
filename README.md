@@ -157,6 +157,36 @@ The script also keeps several optional parameters for experiments, such as `--tt
 
 ---
 
+## Provided Model Checkpoints
+
+This repository includes the final 5-fold model checkpoints trained by the author using the final submitted configuration.
+
+```text
+models_v2_extraold_w15_dropout030/
+├── fold1_seed2026.pt
+├── fold2_seed2026.pt
+├── fold3_seed2026.pt
+├── fold4_seed2026.pt
+└── fold5_seed2026.pt
+```
+
+These checkpoints correspond to the final Causal Transformer multi-task model with:
+
+* seed `2026`
+* 5-fold GroupKFold ensemble
+* old labeled `test.csv` as extra training data
+* `extra_weight=1.5`
+* `dropout=0.30`
+
+To use these checkpoints, keep the folder `models_v2_extraold_w15_dropout030/` in the repository root and specify the same directory with:
+
+```bash
+--model_dir models_v2_extraold_w15_dropout030
+```
+
+The final command in the next section already uses this checkpoint directory. If you want to retrain the model from scratch, you may delete this folder, rename it, or specify a different `--model_dir` to avoid overwriting the provided checkpoints.
+
+
 ## Quick Start
 
 ### Clone the repository
